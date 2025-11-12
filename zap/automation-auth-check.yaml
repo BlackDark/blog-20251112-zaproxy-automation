@@ -1,0 +1,42 @@
+env:
+  name: API Scan Environment
+  contexts:
+    - name: "TestContext"
+      urls:
+        - "${ZAP_TARGET}"
+  parameters:
+    failOnError: true
+    failOnWarning: true
+    continueOnFailure: false
+    progressToStdout: true
+
+jobs:
+  - type: script
+    parameters:
+      action: add
+      type: httpsender
+      engine: "ECMAScript : Graal.js"
+      name: AddHeader.js
+      inline: |
+        function sendingRequest(msg, initiator, helper) {
+            msg.getRequestHeader().setHeader("Client-ID", java.lang.System.getenv("CLIENT_ID"));
+            msg.getRequestHeader().setHeader("Api-Key", java.lang.System.getenv("API_KEY"));
+        }
+
+        function responseReceived(msg, initiator, helper) {
+            // Do nothing
+        }
+
+  # Test authentication with a single URL from OpenAPI
+  - type: requestor
+    description: "Test authentication headers on a sample endpoint"
+    requests:
+      - url: "${ZAP_TARGET}/health"
+        method: "GET"
+        responseCode: 200
+
+  - type: exitStatus # Sets the exit code based on scan results
+    parameters:
+      errorLevel: High # String: Informational, Low, Medium, High, default: not set
+      warnLevel: Low # String: Informational, Low, Medium, High, default: not set
+

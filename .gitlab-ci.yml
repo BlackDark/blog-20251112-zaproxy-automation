@@ -1,0 +1,92 @@
+# ==============================================================================
+# WEB APPLICATION SECURITY SCANNING JOBS
+# ==============================================================================
+# These jobs run on scheduled pipelines or manual web triggers
+# Rules are centrally defined in main .gitlab-ci.yml and referenced here
+spec:
+  inputs:
+    was-scan:
+      type: boolean
+      description: "Run Web Application Security Scan"
+      default: false
+---
+.webscan-rules:
+  # For scheduled security scans
+  on_schedule_or_web:
+    - if: '$CI_PIPELINE_SOURCE == "schedule" && "$[[ inputs.was-scan ]]" == "true"'
+    - if: '$CI_PIPELINE_SOURCE == "web" &&  "$[[ inputs.was-scan ]]" == "true"'
+
+was:generate_openapi_schema:
+  stage: test
+  image: $DOCKER_RUNNER_IMAGE
+  # Only run on schedule
+  rules:
+    - !reference [.webscan-rules, on_schedule_or_web]
+    - uv sync
+    - uv cache prune --ci
+    - source .venv/bin/activate
+  script:
+    - bash generateMySchema.sh
+    - mkdir -p ${CI_PROJECT_DIR}/openapi-schema
+    - cp api.yaml ${CI_PROJECT_DIR}/openapi-schema/api.yaml
+  artifacts:
+    paths:
+      - openapi-schema/
+    expire_in: "1 hour"
+
+was:execute:
+  stage: test
+  needs:
+    - job: was:generate_openapi_schema
+  image:
+    name: "zaproxy/zap-stable:20251021"
+  rules:
+    - !reference [.webscan-rules, on_schedule_or_web]
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/zap-report-html
+    expire_in: "7 days"
+  variables:
+    # Zap
+    ZAP_TARGET: "https://mytarget.com"
+    ZAP_WORK_DIR: "${CI_PROJECT_DIR}"
+    ZAP_AUTOMATION_FILE: ${CI_PROJECT_DIR}/.ci/zap/automation.yaml
+    ZAP_AUTOMATION_AUTH_FILE: ${CI_PROJECT_DIR}/.ci/zap/automation-auth-check.yaml
+    OPENAPI_FILE: "${CI_PROJECT_DIR}/openapi-schema/api.yaml"
+  script:
+    - |
+      echo "Using User for authentication: ${ClientID}"
+    - |
+      mkdir -p ${CI_PROJECT_DIR}/zap-report-md
+      mkdir -p ${CI_PROJECT_DIR}/zap-report-html
+
+      export ClientID=${SECRET_CLIENT}
+      export ApiKey=${SECRET_KEY}
+
+      echo "Starting ZAP Auth Check Automation ..."
+      zap.sh -cmd -autorun ${ZAP_AUTOMATION_AUTH_FILE}
+
+      echo "Starting ZAP Automation ..."
+      exit_code=0
+      zap.sh -cmd -autorun ${ZAP_AUTOMATION_FILE} || exit_code=$?
+
+      # to print a markdown report if enabled in automation
+      # cat ${CI_PROJECT_DIR}/zap-report-md/*.md
+
+      REPORT_FILE="zap-report-html/report.html"
+      HTML_FILE=$(find zap-report-html/*.html)
+
+      echo "Moving HTML report '$HTML_FILE' to '$REPORT_FILE'"
+
+      mv "${HTML_FILE}" "${REPORT_FILE}"
+
+      HTML_FILE=$REPORT_FILE
+
+      DYNAMIC_ENVIRONMENT_URL=${CI_SERVER_PROTOCOL}://${CI_PROJECT_ROOT_NAMESPACE}.${CI_PAGES_DOMAIN}/-/${CI_PROJECT_PATH#"${CI_PROJECT_ROOT_NAMESPACE}/"}/-/jobs/$CI_JOB_ID/artifacts/${HTML_FILE}
+      echo "Check Report: $DYNAMIC_ENVIRONMENT_URL"
+
+      if [ "$exit_code" = "1" ]; then
+        echo "Some high error found. Failing pipeline ..."
+        # uncomment this to fail the pipeline
+        # exit 1
+      fi
