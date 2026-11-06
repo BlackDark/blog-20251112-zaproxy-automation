@@ -39,7 +39,7 @@ was:execute:
   needs:
     - job: was:generate_openapi_schema
   image:
-    name: "zaproxy/zap-stable:20251021"
+    name: "zaproxy/zap-stable:20251215"
   rules:
     - !reference [.webscan-rules, on_schedule_or_web]
   artifacts:
